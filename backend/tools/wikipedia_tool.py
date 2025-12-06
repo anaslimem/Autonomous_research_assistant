@@ -6,6 +6,11 @@ from google.adk.tools import FunctionTool
 BASE_URL = "https://en.wikipedia.org/api/rest_v1"
 SEARCH_URL = "https://en.wikipedia.org/w/api.php"
 
+# Wikipedia requires a User-Agent header to identify the client
+HEADERS = {
+    "User-Agent": "ResearchAssistantBot/1.0 (Educational project; Python/httpx)"
+}
+
 
 def search_wikipedia(
     query: str,
@@ -33,7 +38,7 @@ def search_wikipedia(
             "utf8": 1
         }
         
-        with httpx.Client(timeout=30.0) as client:
+        with httpx.Client(timeout=30.0, headers=HEADERS) as client:
             response = client.get(SEARCH_URL, params=params)
             response.raise_for_status()
             data = response.json()
@@ -79,7 +84,7 @@ def get_wikipedia_summary(title: str) -> dict:
         encoded_title = title.replace(" ", "_")
         url = f"{BASE_URL}/page/summary/{encoded_title}"
         
-        with httpx.Client(timeout=30.0) as client:
+        with httpx.Client(timeout=30.0, headers=HEADERS) as client:
             response = client.get(url)
             response.raise_for_status()
             data = response.json()
@@ -141,7 +146,7 @@ def get_wikipedia_content(title: str) -> dict:
             "utf8": 1
         }
         
-        with httpx.Client(timeout=30.0) as client:
+        with httpx.Client(timeout=30.0, headers=HEADERS) as client:
             response = client.get(SEARCH_URL, params=params)
             response.raise_for_status()
             data = response.json()
