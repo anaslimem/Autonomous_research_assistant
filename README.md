@@ -29,7 +29,6 @@ A production-grade, multi-agent AI system capable of conducting deep research by
 
 *   **Persistent Memory**:
     *   All conversations and "Thought Paths" are saved to **PostgreSQL**.
-    *   Short-term memory via context window injection ensuring robust context retention.
 
 *   **Fully Containerized**:
     *   5-container microservices setup (Frontend, Backend, Postgres, Qdrant, Neo4j).
@@ -67,7 +66,7 @@ A production-grade, multi-agent AI system capable of conducting deep research by
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/your-username/autonomous-research-assistant.git
+git clone https://github.com/limemanas/autonomous-research-assistant.git
 cd autonomous-research-assistant
 ```
 
