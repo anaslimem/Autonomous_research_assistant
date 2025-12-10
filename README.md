@@ -66,7 +66,7 @@ A production-grade, multi-agent AI system capable of conducting deep research by
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/limemanas/autonomous-research-assistant.git
+git clone https://github.com/anaslimem/autonomous-research-assistant.git
 cd autonomous-research-assistant
 ```
 
