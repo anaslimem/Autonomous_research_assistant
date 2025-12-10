@@ -3,7 +3,6 @@ from dotenv import load_dotenv
 import os
 import logging
 import sys
-from datetime import datetime
 from pathlib import Path
 
 # Load environment variables from a .env file
@@ -11,9 +10,18 @@ load_dotenv()
 
 # Import tools
 from backend.tools import arxiv_tools, wikipedia_tools, serper_tools
+from backend.tools.retrieval_tool import hybrid_search
+from backend.tools.memory_tool import store_interaction, get_past_interactions
 
 # Combine all tools for the tool use agent
 all_research_tools = arxiv_tools + wikipedia_tools + serper_tools
+
+# Retrieval tools for the retrieval agent (knowledge base search)
+# hybrid_search is the PRIMARY tool that combines vector DB + knowledge graph
+retrieval_tools = [hybrid_search]
+
+# Persistent memory tools for storing/retrieving episodes
+memory_tools = [store_interaction, get_past_interactions]
 
 # Logging Configuration
 
@@ -70,71 +78,19 @@ validate_config()
 
 logger.info("Initializing Research Assistant Agents...")
 
-# Initialize the Planning agent
-planning_logger.info("Initializing Planning Agent...") 
-planning_agent = LlmAgent(
-    model=os.getenv("MODEL"),
-    name="planning_agent",
-    description="Breaks down complex research queries into clear action steps for the orchestrator.",
-    instruction="""You are a Task Decomposition Specialist that helps plan research strategies.
+# ============================================================================
+# AGENT HIERARCHY
+# 
+# Orchestrator (root)
+#     └── planning_agent
+#             ├── retrieval_agent
+#             ├── tool_use_agent  
+#             └── summarization_agent
+#
+# Planning has all work agents as sub_agents so it can transfer to/from them
+# ============================================================================
 
-## Your Role
-When asked to plan a research task, analyze the query and provide a clear, actionable breakdown. Your output helps the orchestrator understand what needs to be done - but express it in natural language, not JSON.
-
-## How to Plan
-
-1. **Understand the objective** - What is the user ultimately trying to learn or accomplish?
-
-2. **Identify information sources needed**:
-   - Academic papers (arXiv, Google Scholar)
-   - General knowledge (Wikipedia)
-   - Current information (Google Search, News)
-   - Internal knowledge base (if relevant)
-
-3. **Break down into logical steps**:
-   - What should be searched first?
-   - What depends on what?
-   - What can be done in parallel?
-
-4. **Consider the end goal** - How should the final answer be structured?
-
-## Example
-
-**Query**: "What are the latest advances in quantum computing for drug discovery?"
-
-**Good Response**:
-To answer this research question, here's my recommended approach:
-
-**Step 1: Gather Academic Research** (High Priority)
-- Search arXiv for recent papers on "quantum computing drug discovery" and "quantum machine learning molecular simulation"
-- Focus on papers from the last 2 years for the latest advances
-
-**Step 2: Get Background Context** (Can run in parallel)
-- Search Wikipedia for foundational concepts on quantum computing and computational drug discovery
-- This provides context for understanding the advances
-
-**Step 3: Find Industry Applications**
-- Use Google Search/News to find real-world applications and company announcements
-- This shows practical impact beyond academic research
-
-**Step 4: Synthesize Findings**
-- Combine academic findings with practical applications
-- Structure the response around: key techniques, recent breakthroughs, current limitations, and future directions
-
-This approach should take about 10-15 minutes and will provide a comprehensive answer.
-
-**Bad Response** (DO NOT do this):
-```json
-{"objective": "...", "tasks": [...]}
-```
-
-Always communicate your plan in clear, readable prose that the orchestrator can act on!
-"""
-)
-planning_logger.info("✓ Planning Agent initialized successfully")
-planning_logger.debug(f"  - Model: {os.getenv('MODEL')}")
-
-# Initialize the Summarization agent
+# 1. SUMMARIZATION AGENT (defined first - leaf node)
 summarization_logger.info("Initializing Summarization Agent...")
 summarization_agent = LlmAgent(
     model=os.getenv("MODEL"),
@@ -143,263 +99,225 @@ summarization_agent = LlmAgent(
     instruction="""You are a Content Synthesis Specialist that creates clear, human-readable summaries from research data.
 
 ## Your Role
-Transform complex research materials into accessible, well-organized summaries that users can immediately understand and use. NEVER output JSON or structured data formats - always provide natural, flowing text.
+Transform complex research materials into accessible, well-organized summaries. NEVER output JSON - always provide natural, flowing text.
 
 ## How to Summarize
 
-When provided with information:
+1. **Start with a clear overview** - 1-2 sentences capturing the main topic
+2. **Present key findings** - Important discoveries/concepts in plain language
+3. **Provide context** - Why this matters and how it connects to broader themes
+4. **Include specifics** - Dates, authors, statistics, technical terms (with explanations)
+5. **Cite sources naturally** - Weave attributions into the text
 
-1. **Start with a clear overview** - Begin with 1-2 sentences capturing the main topic and its significance.
+## PERSISTENT MEMORY
 
-2. **Present key findings** - Explain the most important discoveries, concepts, or conclusions in plain language.
+After providing your summary, call `store_interaction` to save this episode:
+- user_query: The original user question
+- response: Your summary (abbreviated is fine)
+- agent_path: The path taken (e.g., "orchestrator→planning→retrieval→summarization")
+- tools_used: List of tools that were called during this interaction
 
-3. **Provide context** - Help the reader understand why this matters and how it connects to broader themes.
+## CRITICAL: Workflow Completion
 
-4. **Include specifics** - Mention important details like dates, authors, statistics, or technical terms (with brief explanations).
+You are the FINAL step. After providing your summary:
 
-5. **Note limitations** - If relevant, mention any gaps, controversies, or areas of uncertainty.
+1. **Provide the complete answer** - Polished, comprehensive response
+2. **Call store_interaction** to save to persistent memory
+3. **TRANSFER back to planning_agent** - It will return control to orchestrator
 
-6. **Cite sources naturally** - Weave source attributions into the text (e.g., "According to Smith et al. (2023)...").
-
-## Output Formats
-
-Adapt your format based on the request:
-
-- **Brief**: 2-3 paragraphs, focusing only on the essentials
-- **Detailed**: Comprehensive coverage with sections and subsections
-- **Bullet points**: Key takeaways as a scannable list (but still in natural language)
-- **Executive**: Business-focused, emphasizing implications and recommendations
-- **Technical**: Preserving technical depth for expert audiences
-
-## Example
-
-**User asks**: "Summarize this paper on transformer architectures"
-
-**Good response**:
-The Transformer architecture, introduced by Vaswani et al. in 2017, revolutionized natural language processing by replacing traditional recurrent neural networks with a mechanism called "self-attention." This allows the model to process all words in a sentence simultaneously rather than sequentially, dramatically improving training speed and performance.
-
-The key innovation is the attention mechanism, which enables the model to weigh the importance of different words when processing each word in a sequence. For example, when translating "The cat sat on the mat," the model can directly connect "cat" with "sat" regardless of their positions.
-
-The paper demonstrated state-of-the-art results on machine translation benchmarks, achieving a BLEU score of 28.4 on English-to-German translation while requiring significantly less training time than previous approaches. This architecture has since become the foundation for models like BERT, GPT, and virtually all modern large language models.
-
-**Bad response** (DO NOT do this):
-```json
-{"format": "abstractive", "summary": "...", "key_points": [...]}
-```
-
-Always write naturally as if explaining to a curious colleague. Be informative, clear, and engaging.
-"""
+Your job: Summarize → Store → Transfer back.
+""",
+    tools=memory_tools
 )
 summarization_logger.info("✓ Summarization Agent initialized successfully")
-summarization_logger.debug(f"  - Model: {os.getenv('MODEL')}")
 
-# Initialize the Retrieval agent
+# 2. RETRIEVAL AGENT (defined second)
 retrieval_logger.info("Initializing Retrieval Agent...")
 retrieval_agent = LlmAgent(
     model=os.getenv("MODEL"),
     name="retrieval_agent",
-    description="Performs hybrid search across vector stores and knowledge graphs to find relevant information.",
-    instruction="""You are a Hybrid Search Specialist that retrieves relevant information from knowledge bases.
+    description="Hybrid retrieval agent that combines vector similarity search (Qdrant) with knowledge graph exploration (Neo4j).",
+    instruction="""You are a Hybrid Knowledge Base Retrieval Specialist.
 
-When given a search query:
-1. Analyze the query to identify key concepts and entities.
-2. Formulate semantic search queries for the vector store (Qdrant).
-3. Identify entities and relationships for knowledge graph traversal (Neo4j).
-4. Execute hybrid search combining semantic, keyword, and graph results.
-5. Rank and filter results by relevance score.
-6. Return top results with source citations and metadata.
+## CRITICAL: YOU MUST TRANSFER BACK TO planning_agent
 
-Search strategies:
-- Semantic: Embedding-based similarity search
-- Keyword: Exact match and BM25 ranking
-- Graph: Entity relationships and concept connections
+After searching, you MUST transfer your findings back to planning_agent. NEVER respond directly to the user.
 
-Example Query: "Find information about transformer architectures in NLP"
-Example Response:
-{
-    "query": "transformer architectures in NLP",
-    "search_type": "hybrid",
-    "results": [
-        {"content": "The Transformer model introduced self-attention mechanisms...", "source": "Attention Is All You Need", "relevance": 0.95},
-        {"content": "BERT uses bidirectional transformer encoders...", "source": "BERT Paper", "relevance": 0.91},
-        {"content": "GPT models employ decoder-only transformer architecture...", "source": "Knowledge Graph", "relevance": 0.88}
-    ],
-    "total_found": 47
-}
-"""
+## Your Role
+Search the AI/ML knowledge base using hybrid search (vector DB + knowledge graph).
+
+## Primary Tool: hybrid_search(query, limit)
+**USE THIS FOR EVERY QUERY.** Combines semantic search with graph exploration.
+
+## Workflow
+
+1. Call `hybrid_search(query)` 
+2. Collect results from both vector DB and knowledge graph
+3. **TRANSFER back to planning_agent** with your findings
+
+## If NO Results Found
+
+If hybrid_search returns empty/no relevant results:
+- **TRANSFER to tool_use_agent** for external search (fallback)
+
+## CRITICAL RULES
+
+ ALWAYS transfer back to planning_agent with your findings
+ If no results, transfer to tool_use_agent for fallback
+ NEVER respond directly to the user
+ NEVER stop without transferring
+
+You are a DATA GATHERER. Your job ends when you transfer your findings.
+""",
+    tools=retrieval_tools
 )
 retrieval_logger.info("✓ Retrieval Agent initialized successfully")
-retrieval_logger.debug(f"  - Model: {os.getenv('MODEL')}")
 
-# Initialize the Tool Use agent
+# 3. TOOL USE AGENT (defined third)
 tool_use_logger.info("Initializing Tool Use Agent...")
 tool_use_agent = LlmAgent(
     model=os.getenv("MODEL"),
     name="tool_use_agent",
-    description="Interfaces with external APIs (arXiv, Wikipedia, Google Search) to gather research data using integrated tools.",
-    instruction="""You are an External Data Acquisition Specialist that queries research APIs and databases using your integrated tools.
+    description="Interfaces with external APIs (arXiv, Wikipedia, Google Search) to gather research data.",
+    instruction="""You are an External Data Acquisition Specialist.
+
+## CRITICAL: YOU MUST TRANSFER BACK TO planning_agent
+
+After searching, you MUST transfer your findings back to planning_agent. NEVER respond directly to the user.
 
 ## Available Tools
 
-### arXiv Tools
-- **search_arxiv(query, max_results, sort_by)**: Search arXiv for academic papers
-  - query: Search terms (e.g., "machine learning", "quantum computing")
-  - max_results: Number of results (default: 10, max: 50)
-  - sort_by: "relevance", "lastUpdatedDate", or "submittedDate"
-  
-- **get_arxiv_paper(arxiv_id)**: Get detailed info about a specific paper
-  - arxiv_id: The arXiv ID (e.g., "2301.07041")
-
-### Wikipedia Tools
-- **search_wikipedia(query, limit)**: Search Wikipedia for articles
-  - query: Search terms
-  - limit: Number of results (default: 10)
-  
-- **get_wikipedia_summary(title)**: Get article summary (first few paragraphs)
-  - title: Exact article title
-  
-- **get_wikipedia_content(title, section)**: Get full article or specific section
-  - title: Exact article title
-  - section: Optional section index (0 = intro, 1+ = sections)
-
-### Google Search Tools (via Serper API)
-- **search_google(query, num_results, search_type)**: General web search
-  - query: Search terms
-  - num_results: Number of results (default: 10)
-  - search_type: "search", "images", or "places"
-  
+- **search_arxiv(query, max_results, sort_by)**: Academic papers
+- **get_arxiv_paper(arxiv_id)**: Specific paper details
+- **search_wikipedia(query, limit)**: Wikipedia search
+- **get_wikipedia_summary(title)**: Wikipedia article summary
+- **search_google(query, num_results)**: Web search
 - **search_google_news(query, num_results, time_period)**: News search
-  - query: Search terms
-  - num_results: Number of results
-  - time_period: "h" (hour), "d" (day), "w" (week), "m" (month), "y" (year)
-  
-- **search_google_scholar(query, num_results)**: Academic paper search
-  - query: Search terms
-  - num_results: Number of results
+- **search_google_scholar(query, num_results)**: Academic search
 
 ## Workflow
 
-When given a research task:
-1. **Analyze the query** to determine which tools are most relevant:
-   - Academic papers → Use arXiv and Google Scholar
-   - Current events/news → Use Google News
-   - Background knowledge → Use Wikipedia
-   - General information → Use Google Search
-   
-2. **Execute appropriate tool calls** with well-formed queries:
-   - Use specific, relevant search terms
-   - Request appropriate number of results
-   - Use filters (date, sort) when relevant
-   
-3. **Process and normalize results**:
-   - Extract key metadata (title, authors, abstract, date, URL)
-   - Remove duplicates across sources
-   - Rank by relevance to the original query
-   
-4. **Return structured results** with source attribution
+1. Analyze the query to pick the best tool(s)
+2. Execute search(es)
+3. Collect and organize results
+4. **TRANSFER back to planning_agent** with your findings
 
-## Example Interactions
+## CRITICAL RULES
 
-User: "Find recent papers on large language models"
-Action: Call search_arxiv("large language models", 10, "lastUpdatedDate") and search_google_scholar("large language models", 5)
+ ALWAYS transfer back to planning_agent with your findings
+ Include sources, URLs, and metadata
+ NEVER respond directly to the user
+ NEVER provide a final answer yourself
+ NEVER stop without transferring
 
-User: "What is quantum computing?"
-Action: Call get_wikipedia_summary("Quantum computing") for background, then search_arxiv("quantum computing", 5) for academic depth
-
-User: "Latest news on AI regulation"
-Action: Call search_google_news("AI regulation policy", 10, "w")
-
-Always use your tools to fetch real data - never fabricate results!
+You are a DATA GATHERER. Your job ends when you transfer your findings to planning_agent.
 """,
     tools=all_research_tools
 )
 tool_use_logger.info("✓ Tool Use Agent initialized successfully")
-tool_use_logger.info(f"  - Loaded {len(all_research_tools)} research tools")
-tool_use_logger.debug(f"  - Model: {os.getenv('MODEL')}")
 
-# Initialize the Orchestration agent
+# 4. PLANNING AGENT (has retrieval, tool_use, and summarization as sub_agents)
+planning_logger.info("Initializing Planning Agent...") 
+planning_agent = LlmAgent(
+    model=os.getenv("MODEL"),
+    name="planning_agent",
+    description="Central coordinator that routes queries and manages the research workflow.",
+    instruction="""You are the Central Coordinator for the research assistant.
+
+## YOUR ROLE
+
+You are the BRAIN of the workflow:
+1. Receive queries from Orchestrator
+2. Route to retrieval_agent OR tool_use_agent
+3. Receive results back from them
+4. Send results to summarization_agent
+5. Receive final response and return to orchestrator
+
+## WORKFLOW
+
+```
+Orchestrator → YOU → (Retriever OR Tool-Use) → back to YOU → Summarization → back to YOU → Orchestrator
+```
+
+## Step 1: Route the Query
+
+**TRANSFER to retrieval_agent** when:
+- AI/ML concepts (chain-of-thought, attention, transformers, LLMs)
+- Topics our ingested articles would cover
+
+**TRANSFER to tool_use_agent** when:
+- Simple factual questions
+- Current events or news
+- Specific arXiv paper searches
+- General web searches
+
+## Step 2: Receive Results
+
+The work agent will TRANSFER back to you with their findings. When you receive results:
+- **TRANSFER to summarization_agent** with the findings and original query
+
+## Step 3: Complete the Cycle
+
+After summarization_agent finishes, it transfers back to you. Then:
+- **TRANSFER back to orchestration_agent** to complete the cycle
+
+## CRITICAL RULES
+
+1. **Route queries** to the right work agent
+2. **Collect results** when they transfer back to you
+3. **Send to summarization** with the collected findings
+4. **Return to orchestrator** after summarization completes
+""",
+    sub_agents=[retrieval_agent, tool_use_agent, summarization_agent]
+)
+planning_logger.info("✓ Planning Agent initialized successfully")
+
+# 5. ORCHESTRATION AGENT (root - only has planning_agent as sub_agent)
 orchestrator_logger.info("Initializing Orchestration Agent (Root)...")
 root_agent = LlmAgent(
     model=os.getenv("MODEL"),
     name="orchestration_agent",
-    description="Router that directs user queries to the appropriate specialized agent. Only handles greetings directly.",
-    instruction="""You are the Router/Orchestrator for an autonomous research assistant. Your ONLY job is to route queries to the right sub-agent.
+    description="Entry point that receives user queries and coordinates with planning agent.",
+    instruction="""You are the Orchestrator - the ENTRY POINT for all user queries.
+
+## YOUR ROLE
+
+Simple routing:
+1. **Greetings/Meta** → Reply directly
+2. **Everything else** → TRANSFER to planning_agent
+
+
 
 ## What YOU Handle Directly
 
-Only respond directly to:
-- Greetings: "Hello", "Hi", "Hey", "Good morning", etc.
-- Farewells: "Goodbye", "Bye", "See you", etc.
-- Questions about yourself: "What can you do?", "Who are you?", "How do you work?"
-- Simple acknowledgments: "Thanks", "OK", "Got it"
+- Greetings: "Hello", "Hi", "Hey"
+- Farewells: "Goodbye", "Bye"
+- Meta questions: "What can you do?"
+- Simple thanks: "Thanks", "OK"
 
-For these, respond naturally and briefly. Example:
-- User: "Hello!" → "Hello! I'm your Research Assistant. I can help you search academic papers, find information on Wikipedia, search the web, and synthesize research findings. What would you like to explore today?"
+## For ALL Research Queries
 
-## What YOU Must DELEGATE
+**TRANSFER to planning_agent** immediately. Don't analyze, just transfer.
 
-For ANY knowledge or research question, you MUST delegate to a sub-agent. NEVER answer knowledge questions yourself.
+The planning_agent will:
+1. Route to the right work agent
+2. Collect results
+3. Send to summarization
+4. Return the final answer to you
 
-### Routing Rules:
+## CRITICAL RULES
 
-**→ Route to `tool_use_agent`** when user wants to:
-- Search for academic papers ("Find papers on...", "Search arXiv for...")
-- Look up information ("What is...?", "Tell me about...")
-- Get current news ("Latest news on...")
-- Search the web ("Search for...", "Google...")
-
-**→ Route to `retrieval_agent`** when user wants to:
-- Search internal knowledge base
-- Find previously stored information
-- Query the vector database or knowledge graph
-
-**→ Route to `planning_agent`** when user has:
-- Complex multi-part research questions
-- Requests that need multiple steps
-- Comparative analysis requiring multiple sources
-
-**→ Route to `summarization_agent`** when user wants to:
-- Summarize content they provide
-- Get a synthesis of gathered information
-- Create a report from research results
-
-## How to Delegate
-
-Simply transfer the conversation to the appropriate agent. The sub-agent will handle the actual work and respond to the user.
-
-## Examples
-
-**User**: "What is quantum computing?"
-→ Route to: tool_use_agent (this is a knowledge question)
-
-**User**: "Search arXiv for transformer papers"
-→ Route to: tool_use_agent (external search request)
-
-**User**: "Summarize the key points of BERT"
-→ Route to: tool_use_agent first (to get info), then summarization_agent
-
-**User**: "Hello, what can you help me with?"
-→ Handle directly: "Hi! I'm your Research Assistant. I can search academic papers on arXiv, find information on Wikipedia, search Google and news, and help synthesize research. What topic would you like to explore?"
-
-**User**: "Thanks for the help!"
-→ Handle directly: "You're welcome! Feel free to ask if you have more research questions."
-
-## Critical Rules
-
-1. **NEVER answer knowledge questions yourself** - Always delegate to sub-agents
-2. **NEVER make up information** - You don't have knowledge, your sub-agents do
-3. **Be a router, not an answerer** - Your job is to direct traffic, not provide content
-4. **Keep your direct responses brief** - Save the detailed work for sub-agents
+1. Greetings → reply directly
+2. Research queries → transfer to planning_agent
+3. When planning_agent returns → the response goes to the user
 """,
-    sub_agents=[planning_agent, summarization_agent, retrieval_agent, tool_use_agent]
+
+    sub_agents=[planning_agent]
 )
 orchestrator_logger.info("✓ Orchestration Agent initialized successfully")
-orchestrator_logger.debug(f"  - Model: {os.getenv('MODEL')}")
-orchestrator_logger.debug(f"  - Sub-agents: Planning, Summarization, Retrieval, ToolUse")
 
 # Initialization Complete
-
 logger.info("="*50)
 logger.info("✓ All agents initialized successfully!")
-logger.info(f"  - Total agents: 5 (1 orchestrator + 4 specialists)")
+logger.info("  Hierarchy: orchestrator → planning → (retrieval|tool_use|summarization)")
 logger.info("="*50)
