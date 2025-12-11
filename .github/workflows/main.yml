@@ -1,0 +1,70 @@
+name: Main
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Run Tests and Linting
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+            enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Run Linting (Ruff)
+        run: uv run ruff check .
+
+      - name: Run Type Checking (MyPy)
+        run: uv run mypy .
+
+      - name: Run Tests (Pytest)
+        run: uv run pytest
+
+  docker-build:
+    name: Verify Docker Builds
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        service: [backend, frontend]
+        include:
+          - service: backend
+            context: .
+            dockerfile: backend/Dockerfile
+          - service: frontend
+            context: .
+            dockerfile: frontend/Dockerfile
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.service }} image
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: false
+          tags: research-${{ matrix.service }}:test
