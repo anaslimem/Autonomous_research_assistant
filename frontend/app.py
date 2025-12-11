@@ -108,7 +108,7 @@ def delete_session(session_id):
 # --- Sidebar ---
 
 with st.sidebar:
-    st.title("🧠 Research Agent")
+    st.title("Research Agent")
     
     col1, col2 = st.columns([0.8, 0.2])
     with col1:
