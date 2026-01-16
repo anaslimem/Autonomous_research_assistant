@@ -84,15 +84,25 @@ class SessionInfo(BaseModel):
 async def get_runner(session_id: str) -> Runner:
     # Ensure session exists in the service
     try:
+        # Try to get the session first
         await session_service.get_session(session_id)
-    except Exception:
-        # Create new session if not found
-        await session_service.create_session(
-            session_id=session_id,
-            app_name="research_assistant",
-            user_id="user"
-        )
-        logger.info(f"Created new session: {session_id}")
+    except Exception as e:
+        logger.info(f"Session {session_id} not found or error accessing it: {e}. Attempting to create.")
+        try:
+            # Create new session if not found
+            await session_service.create_session(
+                session_id=session_id,
+                app_name="research_assistant",
+                user_id="user"
+            )
+            logger.info(f"Created new session: {session_id}")
+        except Exception as create_error:
+
+            if "already exists" in str(create_error):
+                logger.info(f"Session {session_id} already exists (recovered from race/check error).")
+            else:
+                logger.error(f"Failed to create session {session_id}: {create_error}")
+                raise create_error
 
     if session_id not in active_runners:
         active_runners[session_id] = Runner(
