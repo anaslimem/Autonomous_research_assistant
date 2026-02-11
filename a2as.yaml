@@ -1,0 +1,516 @@
+manifest:
+  version: "0.1.3"
+  schema: https://a2as.org/cert/schema
+  subject:
+    name: anaslimem/autonomous_research_assistant
+    source: https://github.com/anaslimem/autonomous_research_assistant
+    branch: main
+    commit: "d8aa5557"
+    scope: [backend/agents/__init__.py, backend/agents/agent.py, backend/api.py, backend/ingestion/entity_extractor.py, backend/tools/__init__.py,
+      backend/tools/memory_tool.py, backend/tools/retrieval_tool.py]
+  issued:
+    by: A2AS.org
+    at: '2026-02-11T16:46:55Z'
+    url: https://a2as.org/certified/agents/anaslimem/autonomous_research_assistant
+  signatures:
+    digest: sha256:Hp1VAVVkiJpEC0J7Q_I1gpCCrhIzB0u8n8TOZQnCN1I
+    key: ed25519:jBj-HvkfDNgqzlIlKbwt6PUWuM3SBUJXrzeAW88EUWQ
+    sig: ed25519:5dTiyiy58hMCsoAHM5CxYBGxlfJgYji_oG6ylI4Z1ZPI63FhYUi9PPfAzfgCN0xBgH0ZHlogUObv3qsI-GPmCw
+
+agents:
+  planning_agent:
+    type: instance
+    models: [MODEL]
+    params:
+      name: planning_agent
+      description: Central coordinator that routes queries and manages the research workflow.
+      instruction: [You are the Central Coordinator for the research assistant., '## YOUR ROLE', 'You are the BRAIN of the
+          workflow:', 1. Receive queries from Orchestrator, 2. Route to retrieval_agent OR tool_use_agent, 3. Receive results
+          back from them, 4. Send results to summarization_agent, 5. Receive final response and return to orchestrator, '##
+          WORKFLOW', '```', Orchestrator → YOU → (Retriever OR Tool-Use) → back to YOU → Summarization → back to YOU → Orchestrator,
+        '```', '## Step 1: Route the Query', '**TRANSFER to retrieval_agent** when:', '- AI/ML concepts (chain-of-thought,
+          attention, transformers, LLMs)', '- Topics our ingested articles would cover', '**TRANSFER to tool_use_agent** when:',
+        '- Simple factual questions', '- Current events or news', '- Specific arXiv paper searches', '- General web searches',
+        '## Step 2: Receive Results', 'The work agent will TRANSFER back to you with their findings. When you receive results:',
+        '- **TRANSFER to summarization_agent** with the findings and original query', '## Step 3: Complete the Cycle', 'After
+          summarization_agent finishes, it transfers back to you. Then:', '- **TRANSFER back to orchestration_agent** to complete
+          the cycle', '## CRITICAL RULES', 1. **Route queries** to the right work agent, 2. **Collect results** when they
+          transfer back to you, 3. **Send to summarization** with the collected findings, 4. **Return to orchestrator** after
+          summarization completes]
+      sub_agents: [retrieval_agent, tool_use_agent, summarization_agent]
+  retrieval_agent:
+    type: instance
+    models: [MODEL]
+    tools: [hybrid_search]
+    params:
+      name: retrieval_agent
+      description: Hybrid retrieval agent that combines vector similarity search (Qdrant) with knowledge graph exploration
+        (Neo4j).
+      instruction: [You are a Hybrid Knowledge Base Retrieval Specialist., '## CRITICAL: YOU MUST TRANSFER BACK TO planning_agent',
+        'After searching, you MUST transfer your findings back to planning_agent. NEVER respond directly to the user.', '##
+          Your Role', Search the AI/ML knowledge base using hybrid search (vector DB + knowledge graph)., '## Primary Tool:
+          hybrid_search(query, limit)', '**USE THIS FOR EVERY QUERY.** Combines semantic search with graph exploration.',
+        '## Workflow', 1. Call `hybrid_search(query)`, 2. Collect results from both vector DB and knowledge graph, 3. **TRANSFER
+          back to planning_agent** with your findings, '## If NO Results Found', 'If hybrid_search returns empty/no relevant
+          results:', '- **TRANSFER to tool_use_agent** for external search (fallback)', '## CRITICAL RULES', ALWAYS transfer
+          back to planning_agent with your findings, 'If no results, transfer to tool_use_agent for fallback', NEVER respond
+          directly to the user, NEVER stop without transferring, You are a DATA GATHERER. Your job ends when you transfer
+          your findings.]
+  root_agent:
+    type: instance
+    models: [MODEL]
+    params:
+      name: orchestration_agent
+      description: Entry point that receives user queries and coordinates with planning agent.
+      instruction: [You are the Orchestrator - the ENTRY POINT for all user queries., '## YOUR ROLE', 'Simple routing:', 1.
+          **Greetings/Meta** → Reply directly, 2. **Everything else** → TRANSFER to planning_agent, '## What YOU Handle Directly',
+        '- Greetings: "Hello", "Hi", "Hey"', '- Farewells: "Goodbye", "Bye"', '- Meta questions: "What can you do?"', '- Simple
+          thanks: "Thanks", "OK"', '## For ALL Research Queries', '**TRANSFER to planning_agent** immediately. Don''t analyze,
+          just transfer.', 'The planning_agent will:', 1. Route to the right work agent, 2. Collect results, 3. Send to summarization,
+        4. Return the final answer to you, '## CRITICAL RULES', 1. Greetings → reply directly, 2. Research queries → transfer
+          to planning_agent, 3. When planning_agent returns → the response goes to the user]
+      sub_agents: [planning_agent]
+  summarization_agent:
+    type: instance
+    models: [MODEL]
+    tools: [store_interaction, get_past_interactions]
+    params:
+      name: summarization_agent
+      description: Synthesizes and summarizes content from multiple sources into coherent, well-structured reports.
+      instruction: ['You are a Content Synthesis Specialist that creates clear, human-readable summaries from research data.',
+        '## Your Role', 'Transform complex research materials into accessible, well-organized summaries. NEVER output JSON
+          - always provide natural, flowing text.', '## How to Summarize', 1. **Start with a clear overview** - 1-2 sentences
+          capturing the main topic, 2. **Present key findings** - Important discoveries/concepts in plain language, 3. **Provide
+          context** - Why this matters and how it connects to broader themes, '4. **Include specifics** - Dates, authors,
+          statistics, technical terms (with explanations)', 5. **Cite sources naturally** - Weave attributions into the text,
+        '## PERSISTENT MEMORY', 'After providing your summary, call `store_interaction` to save this episode:', '- user_query:
+          The original user question', '- response: Your summary (abbreviated is fine)', '- agent_path: The path taken (e.g.,
+          "orchestrator→planning→retrieval→summarization")', '- tools_used: List of tools that were called during this interaction',
+        '## CRITICAL: Workflow Completion', 'You are the FINAL step. After providing your summary:', '1. **Provide the complete
+          answer** - Polished, comprehensive response', 2. **Call store_interaction** to save to persistent memory, 3. **TRANSFER
+          back to planning_agent** - It will return control to orchestrator, 'Your job: Summarize → Store → Transfer back.']
+  tool_use_agent:
+    type: instance
+    models: [MODEL]
+    tools: [all_research_tools]
+    params:
+      name: tool_use_agent
+      description: Interfaces with external APIs (arXiv, Wikipedia, Google Search) to gather research data.
+      instruction: [You are an External Data Acquisition Specialist., '## CRITICAL: YOU MUST TRANSFER BACK TO planning_agent',
+        'After searching, you MUST transfer your findings back to planning_agent. NEVER respond directly to the user.', '##
+          Available Tools', '- **search_arxiv(query, max_results, sort_by)**: Academic papers', '- **get_arxiv_paper(arxiv_id)**:
+          Specific paper details', '- **search_wikipedia(query, limit)**: Wikipedia search', '- **get_wikipedia_summary(title)**:
+          Wikipedia article summary', '- **search_google(query, num_results)**: Web search', '- **search_google_news(query,
+          num_results, time_period)**: News search', '- **search_google_scholar(query, num_results)**: Academic search', '##
+          Workflow', 1. Analyze the query to pick the best tool(s), 2. Execute search(es), 3. Collect and organize results,
+        4. **TRANSFER back to planning_agent** with your findings, '## CRITICAL RULES', ALWAYS transfer back to planning_agent
+          with your findings, 'Include sources, URLs, and metadata', NEVER respond directly to the user, NEVER provide a final
+          answer yourself, NEVER stop without transferring, You are a DATA GATHERER. Your job ends when you transfer your
+          findings to planning_agent.]
+
+models:
+  MODEL:
+    type: literal
+    agents: [summarization_agent, retrieval_agent, tool_use_agent, planning_agent, root_agent]
+
+tools:
+  all_research_tools:
+    type: function
+    agents: [tool_use_agent]
+    params:
+      dynamic: "True"
+  get_past_interactions:
+    type: function
+    agents: [summarization_agent]
+    params:
+      description: |-
+        Retrieve past interactions from persistent memory for context.
+
+        Args:
+            tool_context: ADK context (provides session ID automatically)
+            limit: Number of past episodes to retrieve
+
+        Returns:
+            Formatted string of past interactions
+  hybrid_search:
+    type: function
+    agents: [retrieval_agent]
+    params:
+      description: "Perform a hybrid search combining vector semantic search (Qdrant) with \nknowledge graph exploration (Neo4j)\
+        \ for comprehensive results.\n\nThis function:\n1. Searches the vector database for semantically similar documents\n\
+        2. Extracts key entities/topics from the query\n3. Finds related articles and entities in the knowledge graph\n4.\
+        \ Combines and deduplicates results\n\nArgs:\n    query: The search query text\n    limit: Number of results per source\
+        \ (default: 5)\nReturns:\n    str: Formatted string with combined results from both sources"
+  store_interaction:
+    type: function
+    agents: [summarization_agent]
+    params:
+      description: |-
+        Store a completed interaction in persistent memory.
+        Called by summarization agent after providing a response.
+
+        Args:
+            tool_context: ADK context (provides session ID automatically)
+            user_query: The original user question
+            response: The final response provided
+            agent_path: Path taken (e.g., "planning→retrieval→summarization")
+            tools_used: List of tools that were called
+
+        Returns:
+            Confirmation message
+
+teams:
+  planning_agent:
+    type: hierarchy
+    agents: [planning_agent, retrieval_agent, tool_use_agent, summarization_agent]
+  root_agent:
+    type: hierarchy
+    agents: [root_agent, planning_agent]
+
+imports:
+  arxiv: arxiv
+  arxiv_tools: backend.tools.arxiv_tools
+  asynccontextmanager: contextlib.asynccontextmanager
+  BaseModel: pydantic.BaseModel
+  chunk_and_embed: backend.ingestion.chunker.chunk_and_embed
+  CORSMiddleware: fastapi.middleware.cors.CORSMiddleware
+  create_engine: sqlalchemy.create_engine
+  datetime: datetime.datetime
+  DateTime: sqlalchemy.DateTime
+  DeclarativeBase: sqlalchemy.orm.DeclarativeBase
+  delete_episodes_by_session: backend.memory.persistent.delete_episodes_by_session
+  embed_query: backend.ingestion.embedder.embed_query
+  extract_entities: backend.ingestion.entity_extractor.extract_entities
+  FastAPI: fastapi.FastAPI
+  func: sqlalchemy.sql.func
+  FunctionTool: google.adk.tools.FunctionTool
+  genai: google.generativeai
+  get_all_episodes: backend.memory.persistent.get_all_episodes
+  get_arxiv_paper_tool: arxiv_tool.get_arxiv_paper_tool
+  get_past_interactions: backend.tools.memory_tool.get_past_interactions
+  get_recent_episodes: backend.memory.persistent.get_recent_episodes
+  get_wikipedia_content_tool: wikipedia_tool.get_wikipedia_content_tool
+  get_wikipedia_summary_tool: wikipedia_tool.get_wikipedia_summary_tool
+  GraphDatabase: neo4j.GraphDatabase
+  HTTPException: fastapi.HTTPException
+  httpx: httpx
+  hybrid_search: backend.tools.retrieval_tool.hybrid_search
+  init_collection: backend.storage.qdrant_store.init_collection
+  init_db: backend.memory.persistent.init_db
+  InMemorySessionService: google.adk.sessions.InMemorySessionService
+  JSON: sqlalchemy.JSON
+  json: json
+  LlmAgent: google.adk.agents.LlmAgent
+  load_dotenv: dotenv.load_dotenv
+  logging: logging
+  Mapped: sqlalchemy.orm.Mapped
+  mapped_column: sqlalchemy.orm.mapped_column
+  models: qdrant_client.models
+  neo4j_driver: backend.storage.neo4j_store.neo4j_driver
+  Optional: typing.Optional
+  os: os
+  Path: pathlib.Path
+  PointStruct: qdrant_client.models.PointStruct
+  QdrantClient: qdrant_client.QdrantClient
+  re: re
+  root_agent: agent.root_agent
+  Runner: google.adk.runners.Runner
+  scrape_url: backend.tools.scrapper_tool.scrape_url
+  search_arxiv_tool: arxiv_tool.search_arxiv_tool
+  search_google_news_tool: serper_tool.search_google_news_tool
+  search_google_scholar_tool: serper_tool.search_google_scholar_tool
+  search_google_tool: serper_tool.search_google_tool
+  search_similar: backend.storage.qdrant_store.search_similar
+  search_wikipedia_tool: wikipedia_tool.search_wikipedia_tool
+  SentenceTransformer: sentence_transformers.SentenceTransformer
+  serper_tools: backend.tools.serper_tools
+  sessionmaker: sqlalchemy.orm.sessionmaker
+  store_article_with_entities: backend.storage.neo4j_store.store_article_with_entities
+  store_chunks: backend.storage.qdrant_store.store_chunks
+  store_episode: backend.memory.persistent.store_episode
+  store_interaction: backend.tools.memory_tool.store_interaction
+  String: sqlalchemy.String
+  sys: sys
+  Text: sqlalchemy.Text
+  ToolContext: google.adk.tools.ToolContext
+  types: google.genai.types
+  Union: typing.Union
+  UUID: sqlalchemy.dialects.postgresql.UUID
+  uuid: uuid
+  wikipedia_tools: backend.tools.wikipedia_tools
+
+functions:
+  chat:
+    type: async
+    module: backend.api
+    args: [request]
+  close_connection:
+    type: sync
+    module: backend.storage.neo4j_store
+  create_entity:
+    type: sync
+    module: backend.storage.neo4j_store
+    args: [entity_type, name, properties]
+  create_relationship:
+    type: sync
+    module: backend.storage.neo4j_store
+    args: [from_type, from_name, relationship, to_type, to_name]
+  delete_episodes_by_session:
+    type: sync
+    module: backend.memory.persistent
+    args: [session_id]
+    params:
+      returns: bool
+  delete_session:
+    type: async
+    module: backend.api
+    args: [session_id]
+  embed_documents:
+    type: sync
+    module: backend.ingestion.embedder
+    args: [texts]
+    params:
+      returns: list
+  embed_query:
+    type: sync
+    module: backend.ingestion.embedder
+    args: [query]
+    params:
+      returns: list
+  extract_entities:
+    type: sync
+    module: backend.ingestion.entity_extractor
+    args: [text, title]
+    params:
+      returns: dict
+  get_all_episodes:
+    type: sync
+    module: backend.memory.persistent
+    args: [limit]
+    params:
+      returns: list[Episode]
+  get_arxiv_paper:
+    type: sync
+    module: backend.tools.arxiv_tool
+    args: [arxiv_id]
+    params:
+      returns: dict
+  get_past_interactions:
+    type: sync
+    module: backend.tools.memory_tool
+    args: [tool_context, limit]
+    params:
+      returns: str
+  get_recent_episodes:
+    type: sync
+    module: backend.memory.persistent
+    args: [session_id, limit]
+    params:
+      returns: list[Episode]
+  get_runner:
+    type: async
+    module: backend.api
+    args: [session_id]
+    params:
+      returns: Runner
+  get_session_messages:
+    type: async
+    module: backend.api
+    args: [session_id]
+  get_wikipedia_content:
+    type: sync
+    module: backend.tools.wikipedia_tool
+    args: [title]
+    params:
+      returns: dict
+  get_wikipedia_summary:
+    type: sync
+    module: backend.tools.wikipedia_tool
+    args: [title]
+    params:
+      returns: dict
+  health:
+    type: async
+    module: backend.api
+  hybrid_search:
+    type: sync
+    module: backend.tools.retrieval_tool
+    args: [query, limit]
+    params:
+      returns: str
+  ingest_url:
+    type: sync
+    module: backend.ingestion.pipeline
+    args: [url]
+    params:
+      returns: dict
+  init_collection:
+    type: sync
+    module: backend.storage.qdrant_store
+  init_db:
+    type: sync
+    module: backend.memory.persistent
+  lifespan:
+    type: async
+    module: backend.api
+    args: [app]
+  list_sessions:
+    type: async
+    module: backend.api
+  root:
+    type: async
+    module: backend.api
+  search_arxiv:
+    type: sync
+    module: backend.tools.arxiv_tool
+    args: [query, max_results, sort_by]
+    params:
+      returns: dict
+  search_google:
+    type: sync
+    module: backend.tools.serper_tool
+    args: [query, num_results, search_type]
+    params:
+      returns: dict
+  search_google_news:
+    type: sync
+    module: backend.tools.serper_tool
+    args: [query, num_results]
+    params:
+      returns: dict
+  search_google_scholar:
+    type: sync
+    module: backend.tools.serper_tool
+    args: [query, num_results]
+    params:
+      returns: dict
+  search_similar:
+    type: sync
+    module: backend.storage.qdrant_store
+    args: [query_embedding, limit, score_threshold]
+    params:
+      returns: list[dict]
+  search_wikipedia:
+    type: sync
+    module: backend.tools.wikipedia_tool
+    args: [query, max_results]
+    params:
+      returns: dict
+  store_article_with_entities:
+    type: sync
+    module: backend.storage.neo4j_store
+    args: [article_data]
+  store_chunks:
+    type: sync
+    module: backend.storage.qdrant_store
+    args: [chunks, metadata]
+    params:
+      returns: int
+  store_episode:
+    type: sync
+    module: backend.memory.persistent
+    args: [session_id, user_query, agent_response, agent_path, tools_used]
+    params:
+      returns: Episode
+  store_interaction:
+    type: sync
+    module: backend.tools.memory_tool
+    args: [tool_context, user_query, response, agent_path, tools_used]
+    params:
+      returns: str
+  update_feedback:
+    type: sync
+    module: backend.memory.persistent
+    args: [episode_id, feedback]
+    params:
+      returns: bool
+  validate_config:
+    type: sync
+    module: backend.agents.agent
+  verify_connection:
+    type: sync
+    module: backend.storage.neo4j_store
+
+variables:
+  DATABASE_URL:
+    type: env
+    params:
+      caller: [os.getenv]
+      path: [backend.memory.persistent]
+  EMBEDDING_DIMENSION:
+    type: env
+    params:
+      caller: [os.getenv]
+      path: [backend.storage.qdrant_store, backend.ingestion.embedder]
+  EMBEDDING_MODEL:
+    type: env
+    params:
+      caller: [os.getenv]
+      path: [backend.ingestion.embedder]
+  GOOGLE_API_KEY:
+    type: env
+    params:
+      caller: [os.getenv]
+      path: [backend.agents.agent, backend.ingestion.entity_extractor]
+  LOG_LEVEL:
+    type: env
+    params:
+      caller: [os.getenv]
+      path: [backend.agents.agent]
+  MODEL:
+    type: env
+    params:
+      caller: [os.getenv]
+      path: [backend.ingestion.entity_extractor]
+  NEO4J_PASSWORD:
+    type: env
+    params:
+      caller: [os.getenv]
+      path: [backend.storage.neo4j_store]
+  NEO4J_URI:
+    type: env
+    params:
+      caller: [os.getenv]
+      path: [backend.storage.neo4j_store]
+  NEO4J_USER:
+    type: env
+    params:
+      caller: [os.getenv]
+      path: [backend.storage.neo4j_store]
+  QDRANT_COLLECTION:
+    type: env
+    params:
+      caller: [os.getenv]
+      path: [backend.storage.qdrant_store]
+  QDRANT_PORT:
+    type: env
+    params:
+      caller: [os.getenv]
+      path: [backend.storage.qdrant_store]
+  QDRANT_URL:
+    type: env
+    params:
+      caller: [os.getenv]
+      path: [backend.storage.qdrant_store]
+  SERPER_API_KEY:
+    type: env
+    params:
+      caller: [os.getenv]
+      path: [backend.tools.serper_tool]
+  var:
+    type: env
+    params:
+      caller: [os.getenv]
+      path: [backend.agents.agent]
+
+files:
+  agents.log:
+    type: literal
+    actions: [read]
+    params:
+      path: [log_dir]
+  log_dir:
+    type: variable
+    actions: [write]
+    params:
+      caller: [log_dir.mkdir]
